@@ -26,11 +26,7 @@ pub enum GPS_Statement {
     Other,
 }
 
-#[derive(Debug)]
-pub enum Validity {
-    Valid,
-    NotValid,
-}
+
 #[derive(Debug)]
 pub enum Half {
     First,
@@ -253,23 +249,6 @@ pub struct NEO6 <'a, Rx3, Tx1> {
     rx: Rx3,
     tx: Tx1,
     buffer: MSG<'a>,
-    GPStime: GPSTime,
-    GPSdate: GPSDate,
-    validity: Validity,
-    position: Position,
-    // lattitude: f64,
-    // lattitude_drection: u8,
-    // longitude: f64,
-    // longitude_drection: u8,
-    // altitude: f64,
-
-    // speed_knots: f64,
-    // speed_km: f64,
-
-    // sat_num: u8,
-    // quality: u8,
-    // fix_mode: u8,
-    
 }
 
 impl <'a> NEO6 <'a, Rx3, Tx1> {
@@ -280,11 +259,6 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
             tx: tx,
             buffer: MSG::new(buf, buf_len/2),
             
-            //
-            GPStime: GPSTime::new(),
-            GPSdate: GPSDate::new(),
-            validity: Validity::NotValid,
-            position: Position::new(),
         }
     }
     pub fn listen(&mut self) {
@@ -294,15 +268,7 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
         self.rx.unlisten(crate::serial::Event::Rxne);
     }
     pub fn is_valid(&self) -> bool {
-        let valid  = match self.validity {
-            Validity::Valid => {
-                true
-            },
-            Validity::NotValid => {
-                false
-            },
-        };
-        valid
+        true
     }
     pub fn receive(&mut self) {
         let mut i = 0;
@@ -336,7 +302,6 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
             match cmd {
                     GPS_Statement::GPRMC => { 
                         let rmc_data = self.parse_rmc(info);
-                        self.GPSdate = rmc_data.date;
                     },
                     GPS_Statement::GPGSA => {
                         let gsa_data = self.parse_gsa(info);
@@ -351,7 +316,7 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
             self.buffer.clear();
         }
     }
-    pub fn parse_rmc(&self, data: &[u8]) -> (RMC) {
+    pub fn parse_rmc(&self, data: &[u8]) -> RMC {
         let mut GPSdate = GPSDate::new();
         let mut validity = false;
 
@@ -404,7 +369,7 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
             date: GPSdate,
         }
     }
-    pub fn parse_gsa(&self, data: &[u8]) -> (GSA) {
+    pub fn parse_gsa(&self, data: &[u8]) -> GSA {
         let mut fixmode = FixMode::NoFix;
         let mut sat_ids = [0u8; 12];
         let mut hdop= 0.0f32;
@@ -458,7 +423,7 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
             satellite_id: sat_ids,
         }
     }
-    pub fn parse_gga(&self, data: &[u8]) -> (GGA) {
+    pub fn parse_gga(&self, data: &[u8]) -> GGA {
         let mut GPStime = GPSTime::new();
         let mut pos = Position::new();
         let mut satellites = 0u8;
