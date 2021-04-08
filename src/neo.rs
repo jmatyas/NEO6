@@ -78,7 +78,7 @@ pub struct Position {
     ns_indicator: char,
     longitude: f32,
     ew_indicator: char,
-    // altitude: f32,
+    altitude: f32,
 }
 
 impl Position {
@@ -88,6 +88,7 @@ impl Position {
             ns_indicator: 'N',
             longitude: 0.0,
             ew_indicator: 'E',
+            altitude: 0.0,
         }
     }
 }
@@ -316,7 +317,6 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
                         // let a = block!(self.rx.read()).unwrap();
                         self.buffer.add(a);
                         block!(self.tx.write(a)).ok();
-                        // hprintln!("{:?}", a as char);
                         i += 1;
                     }
                 },
@@ -434,17 +434,17 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
                     // Position Dilution of Precision
                     13 => {
                         let (int, fract) = (field[0] as u32, field[3] as u32);
-                        pdop = int as f32 + (fract as f32)/100.0;
+                        pdop = int as f32 + (fract as f32)/10.0;
                     },
                     // Horizontal Dilution of Precision
                     14 => {
                         let (int, fract) = (field[0] as u32, field[3] as u32);
-                        hdop = int as f32 + (fract as f32)/100.0;
+                        hdop = int as f32 + (fract as f32)/10.0;
                     },
                     // Vertical Dilution of Precision
                     15 => {
                         let (int, fract) = (field[0] as u32, field[3] as u32);
-                        vdop = int as f32 + (fract as f32)/100.0;
+                        vdop = int as f32 + (fract as f32)/10.0;
                     },
                     _ => (),
                 }
@@ -501,6 +501,11 @@ impl <'a> NEO6 <'a, Rx3, Tx1> {
                     // Satellites used
                     6 => {
                         satellites = atoi(&field) as u8;
+                    },
+                    // Altitude 
+                    8 => {
+                        let (alt_int, alt_frac) = (atoi(&field[..2]), field[4]);
+                        pos.altitude = alt_int as f32 + (alt_frac as f32)/10.0
                     },
                     _ => (),
                 }
