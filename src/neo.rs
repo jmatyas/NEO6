@@ -8,6 +8,8 @@ use crate::stm32::{USART1, USART3};
 use crate::serial::Event as SEvent;
 use crate::{Rx1, Tx, Rx3};
 
+use core::fmt;
+
 pub fn atoi(barray: & [u8]) -> u32 {
     let mut value = 0u32;
     let arr_iter = barray.iter();
@@ -23,6 +25,11 @@ pub struct GPSFloat {
     pub fract: u32,
 }
 
+impl fmt::Display for GPSFloat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
+        write!(f, "{}.{}", self.int, self.fract)
+    }
+}
 
 #[derive(Debug)]
 pub enum GPS_Statement {
@@ -57,6 +64,13 @@ impl GPSTime {
     }
 }
 
+impl fmt::Display for GPSTime {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
+        write!(f, "{}:{}:{}", self.hour, self.minute, self.second)
+    }
+}
+
+
 #[derive(Debug, Copy, Clone)]
 pub struct GPSDate {
     pub day: u8,
@@ -74,6 +88,15 @@ impl GPSDate {
         }
     }
 }
+
+
+impl fmt::Display for GPSDate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
+        write!(f, "{}/{}/{}", self.day, self.month, self.year)
+    }
+}
+
+
 
 #[derive(Debug, Copy, Clone)]
 pub struct Position {
@@ -96,6 +119,14 @@ impl Position {
     }
 }
 
+
+impl fmt::Display for Position {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
+        write!(f, "Latt: {} {}; Long: {} {}; Alt: {} m", self.lattitude,  self.ns_indicator, self.longitude, self.ew_indicator, self.altitude)
+    }
+}
+
+
 #[derive(Debug)]
 pub struct GPSSatellite {
     ID: u8,
@@ -104,14 +135,14 @@ pub struct GPSSatellite {
     SNR: u8,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum FixType {
     NoFix,
     GPSFix,
     DifferentialFix,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum FixMode {
     NoFix,
     D2,
@@ -370,6 +401,7 @@ impl <'a> NEO6 <'a, Rx3, Tx> {
                     8 => {
                         let (day, month, year) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(&field[4..6]) as u8);
                         GPSdate = GPSDate{day, month, year};
+                        hprintln!("{}", year);
                     },
                     _ => (),
                 }
@@ -544,32 +576,6 @@ impl GPS_Data {
             satellite_ids: [0u8; 12],
         }
     }
-    // pub fn parse(&mut self) {
-    //     if !self.neo.buffer_is_empty() {
-    //         // hprintln!("s");
-    //         let (mut cmd, mut info) = self.neo.get_line();
-
-    //         match cmd {
-    //                 GPS_Statement::GPRMC => { 
-    //                     // hprintln!("D");
-
-    //                     let rmc_data = self.neo.parse_rmc(info);
-    //                     self.update_rmc(rmc_data);
-    //                 },
-    //                 GPS_Statement::GPGSA => {
-    //                     let gsa_data = self.neo.parse_gsa(info);
-    //                     self.update_gsa(gsa_data);
-    //                 },
-    //                 GPS_Statement::GPGGA => {
-    //                     let gga_data = self.neo.parse_gga(info);
-    //                     self.update_gga(gga_data);
-    //                 },
-    //                 _ => (),
-
-    //         }
-    //         self.neo.clear_buffer();
-    //     }
-    // }
     pub fn is_valid(&self) -> bool {
         self.valid
     }

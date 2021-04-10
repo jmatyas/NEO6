@@ -121,7 +121,6 @@ fn main() -> ! {
 
     free(|cs| {
         G_NEO.borrow(cs).replace(Some(neo));
-        // G_DATA.borrow(cs).replace(Some(gps_data));
     });
 
     NVIC::unpend(stm32::Interrupt::USART3);
@@ -151,7 +150,7 @@ fn main() -> ! {
             });
         }
         if GPS_VALID {
-            hprintln!("{:?}", gps_data.get_date());
+            hprintln!("{}", gps_data.get_date());
         }
     }
 }
