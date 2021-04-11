@@ -3,7 +3,7 @@
 
 use panic_semihosting as _;
 
-use core::cell::{UnsafeCell, RefCell};
+use core::cell::{RefCell};
 use core::ops::{DerefMut};
 
 
@@ -15,7 +15,7 @@ use cortex_m::interrupt::{
 };
 
 mod neo;
-use neo::{MSG, NEO6, GPS_Data};
+use neo::{New, NEO6, GPS_Data};
 use nb::block;
 use embedded_hal::serial::Write;
 
@@ -23,23 +23,16 @@ use stm32f1xx_hal as hal;
 use hal::{
     prelude::*,
     stm32,
-    dma,
     delay::Delay,
     serial::{self, Serial, Config, Rx1, Rx3, Tx1, Tx3},
-    stm32::{interrupt, NVIC},
-    // gpio::{gpioa, Alternate, PushPull, Input, Floating},
+    stm32::{interrupt, NVIC, USART1, USART2, USART3},
 };
-use cortex_m_semihosting::{hprintln};
 
-// static G_UART: Mutex<RefCell<Option<Serial<stm32::USART1, (gpioa::PA9<Alternate<PushPull>>, gpioa::PA10<Input<Floating>>)>>>> = Mutex::new(RefCell::new(None));
-// static G_RXDMA: Mutex<RefCell<Option<RxDma1>>> = Mutex::new(RefCell::new(None));
-// static G_TXDMA: Mutex<RefCell<Option<TxDma1>>> = Mutex::new(RefCell::new(None));
-// static G_SERIAL_CIRC: Mutex<RefCell<Option<SerialCircDMA<RxDma1>>>> = Mutex::new(RefCell::new(None));
-static G_NEO: Mutex<RefCell<Option<NEO6<Rx3, Tx>>>> = Mutex::new(RefCell::new(None));
-// static G_DATA: Mutex<RefCell<Option<GPS_Data>>> = Mutex::new(RefCell::new(None));
-// static GPS_VALID: Mutex<RefCell<Option<bool>>> = Mutex::new(RefCell::new(None));
+static G_NEO: Mutex<RefCell<Option<NEO6<Rx, Tx>>>> = Mutex::new(RefCell::new(None));
 
+pub type Rx = Rx3;
 pub type Tx = Tx1;
+pub type USART = USART3;
 
 #[entry]
 fn main() -> ! {
@@ -64,7 +57,7 @@ fn main() -> ! {
     let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
     let mut _gpioc = dp.GPIOC.split(&mut rcc.apb2);
 
-    let mut dma_channels = dp.DMA1.split(&mut rcc.ahb);
+    // let mut dma_channels = dp.DMA1.split(&mut rcc.ahb);
 
 
     let mut delay = Delay::new(cp.SYST, clocks);
@@ -83,10 +76,6 @@ fn main() -> ! {
         &mut rcc.apb2,
     );
 
-    // serial.listen(serial::Event::Rxne);
-    // serial.listen(serial::Event::Txe);
-    // serial.listen(serial::Event::Tc);
-    // serial.listen(serial::Event::Idle);
     let (mut log_tx, log_rx) = serial.split();
     for byte in b"ADAS" {
         block!(log_tx.write(*byte)).ok();
@@ -94,9 +83,6 @@ fn main() -> ! {
     const LEN: usize = 200;
 
     let tx_buff = singleton!(: [u8; LEN] = [0; LEN] ).unwrap();
-    let mut msg_buff = [0u8; 1024];
-    let msg_len = msg_buff.len();
-
 
     let mut tx_pin = gpiob.pb10.into_alternate_push_pull(&mut gpiob.crh);
     let mut rx_pin = gpiob.pb11.into_floating_input(&mut gpiob.crh);
@@ -106,7 +92,7 @@ fn main() -> ! {
         (tx_pin, rx_pin),
         &mut afio.mapr,
         Config::default()
-                .baudrate(115200.bps())
+                .baudrate(9600.bps())
                 .parity_none(),
         clocks,
         &mut rcc.apb1,
@@ -131,7 +117,6 @@ fn main() -> ! {
 
 
     let mut gps_data = GPS_Data::new();
-    let mut s = 0u8;
     let mut update = true;
 
     loop {
@@ -143,14 +128,26 @@ fn main() -> ! {
                     if neo.data_valid() {
                         neo.unlisten();
                         GPS_VALID = true;
+                        update = false;
                         gps_data = neo.get_data();
-                        update = false;                        
+                    } else if !neo.data_valid() {
+                        GPS_VALID = false;
                     }
                 };
             });
         }
         if GPS_VALID {
-            hprintln!("{}", gps_data.get_date());
+            update = true;
+            free(|cs| {
+                let mut neo_ref = G_NEO.borrow(cs).borrow_mut();
+                if let Some(ref mut neo) = neo_ref.deref_mut() {
+                    neo.report();
+                    neo.listen();
+                }
+            });
+            GPS_VALID = false;
+
+
         }
     }
 }
@@ -158,7 +155,6 @@ fn main() -> ! {
 #[interrupt]
 fn USART3() {
     free(|cs| {
-        // hprintln!("d");
         let mut neo_ref = G_NEO.borrow(cs).borrow_mut();
         if let Some(ref mut neo) = neo_ref.deref_mut() {
             neo.receive();

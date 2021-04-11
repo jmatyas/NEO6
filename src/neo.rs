@@ -1,18 +1,15 @@
 extern crate embedded_hal;
-use embedded_hal::serial::{Read, Write};
+use embedded_hal::serial::{Write};
 use nb::block;
-use cortex_m_semihosting::{hprintln, hprint};
-use core::sync::atomic::{self, Ordering};
 
-use crate::stm32::{USART1, USART3};
+use crate::stm32::{USART1, USART2, USART3};
+use crate::serial::{Rx1, Tx1, Rx2, Tx2, Rx3, Tx3};
 use crate::serial::Event as SEvent;
-use crate::{Rx1, Tx, Rx3};
 
 use core::fmt;
 
 pub fn atoi(barray: & [u8]) -> u32 {
     let mut value = 0u32;
-    let arr_iter = barray.iter();
     for element in barray.iter() {
         value = value*10 + *element as u32 - b'0' as u32;
     }
@@ -232,20 +229,6 @@ impl <'a> MSG <'a> {
     }
 
     pub fn clear(&mut self) {
-        match self.last_read {
-            Half::First => {
-                for byte in self.buffer[..self.cap].iter_mut(){
-                    // hprint!("{:?}", *byte as char);
-                    *byte = 0;
-                }
-            },
-            Half::Second => {
-                for byte in self.buffer[self.cap..].iter_mut(){
-                    // hprint!("{:?}", *byte as char);
-                    *byte = 0;
-                }
-            }
-        };
         self.len -= 1;
     }
     pub fn is_full(&self) -> bool {
@@ -268,7 +251,7 @@ impl <'a> MSG <'a> {
                 b"$GPRMC" => { (GPS_Statement::GPRMC, info) },
                 b"$GPGSA" => { (GPS_Statement::GPGSA, info) },
                 b"$GPGGA" => { (GPS_Statement::GPGGA, info) },
-            //     // b"$GPGSV" => {hprintln!("GPGSV");},
+            //     // b"$GPGSV" => {},
                 _ => { (GPS_Statement::Other, info) },
 
             };
@@ -278,15 +261,19 @@ impl <'a> MSG <'a> {
     }
 }
 
-pub struct NEO6 <'a, Rx3, Tx> {
-    rx: Rx3,
+pub struct NEO6 <'a, Rx, Tx> {
+    rx: Rx,
     tx: Tx,
     buffer: MSG<'a>,
     gps_data: GPS_Data,
 }
 
-impl <'a> NEO6 <'a, Rx3, Tx> {
-    pub fn new(buf: &'a mut [u8], rx: Rx3, tx: Tx) -> Self {
+pub trait New<'a, Rx, Tx> {
+    fn new(buf: &'a mut [u8], rx: Rx, tx: Tx) -> NEO6<Rx, Tx>;
+}
+
+impl<'a, Rx, Tx> New<'a, Rx, Tx> for NEO6<'a, Rx, Tx> {
+    fn new(buf: &'a mut [u8], rx: Rx, tx: Tx) -> Self {
         let buf_len =buf.len();
         NEO6 {
             rx: rx,
@@ -295,249 +282,270 @@ impl <'a> NEO6 <'a, Rx3, Tx> {
             gps_data: GPS_Data::new(),
         }
     }
-    pub fn listen(&mut self) {
-        self.rx.listen(crate::serial::Event::Rxne);
-    }
-    pub fn unlisten(&mut self) {
-        self.rx.unlisten(crate::serial::Event::Rxne);
-    }
-    pub fn data_valid(&self) -> bool {
-        self.gps_data.is_valid()
-    }
-    pub fn receive(&mut self) {
-        let mut i = 0;
-        if let Some(ev) = self.rx.which_event() {
-            match ev {
-                SEvent::Rxne => {
-                    self.rx.clear_event();
-                    if !self.buffer.is_full() {
-                        let a = unsafe { (*USART3::ptr()).dr.read().bits() as u8};
+}
 
-                        // let a = block!(self.rx.read()).unwrap();
-                        self.buffer.add(a);
-                        block!(self.tx.write(a)).ok();
-                        i += 1;
+macro_rules! neo {
+    ($(
+        $(#[$meta:meta])*
+        NEO6: (
+            $USARTX:ident,
+            $rxX: ident,
+            $txX: ident,
+        ),
+    )+) => {
+        $(
+            $(#[$meta])*
+            impl <'a> NEO6 <'a, $rxX, $txX> {
+                pub fn listen(&mut self) {
+                    self.rx.listen(crate::serial::Event::Rxne);
+                }
+                pub fn unlisten(&mut self) {
+                    self.rx.unlisten(crate::serial::Event::Rxne);
+                }
+                pub fn data_valid(&self) -> bool {
+                    self.gps_data.is_valid() && self.gps_data.get_fix_type() != FixType::NoFix && self.gps_data.get_fix_mode() != FixMode::NoFix
+                }
+                pub fn receive(&mut self) {
+                    let mut i = 0;
+                    if let Some(ev) = self.rx.which_event() {
+                        match ev {
+                            SEvent::Rxne => {
+                                self.rx.clear_event();
+                                if !self.buffer.is_full() {
+                                    let a = unsafe { (*$USARTX::ptr()).dr.read().bits() as u8};            
+                                    self.buffer.add(a);
+                                    block!(self.tx.write(a)).ok();
+                                    i += 1;
+                                }
+                            },
+                            _ => {
+                                self.rx.clear_event();
+                            }
+                        }
                     }
-                },
-                _ => {
-                    self.rx.clear_event();
+                }
+                pub fn get_line(&self) -> (GPS_Statement, &[u8]) {
+                    self.buffer.get_line()
+                }
+                pub fn buffer_is_empty(&self) -> bool {
+                    self.buffer.is_empty()
+                }
+                pub fn clear_buffer(&mut self) {
+                    self.buffer.clear();
+                }
+                pub fn parse(&mut self) {
+                    if !self.buffer.is_empty() {
+                        let (mut cmd, mut info) = self.get_line();
+                        match cmd {
+                                GPS_Statement::GPRMC => { 
+                                    let rmc_data = self.parse_rmc(info);
+                                    self.gps_data.update_rmc(rmc_data);
+                                },
+                                GPS_Statement::GPGSA => {
+                                    let gsa_data = self.parse_gsa(info);
+                                    self.gps_data.update_gsa(gsa_data);
+                                },
+                                GPS_Statement::GPGGA => {
+                                    let gga_data = self.parse_gga(info);
+                                    self.gps_data.update_gga(gga_data);
+                                },
+                                _ => (),
+            
+                        }
+                    
+                        self.buffer.clear();
+                    }
+                }
+                pub fn parse_rmc(&self, data: &[u8]) -> RMC {
+                    let mut gpsdate = GPSDate::new();
+                    let mut validity = false;
+            
+                    for (i, field) in data.split(|c| *c == b',').enumerate() {
+                        if field.len() > 0 {
+                            match i {
+                                // GPSTIME
+                                0 => {
+                                    // let (hour, minute, seconds) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(& field[4..6]) as u8);
+                                },
+                                // Receiver Validity
+                                1 => {
+                                    validity = if field[0] == b'A' {
+                                        true
+                                    } else {
+                                        false
+                                    };
+                                },
+                                // Lattitude
+                                2 => {
+                                },
+                                // HEMISPHERE indicator
+                                3 => {
+                                },
+                                // LONGITUDE
+                                4 => {
+                                },
+                                // H ind
+                                5 => {
+                                },
+                                // Speed over ground
+                                6 => {
+            
+                                },
+                                // Course over ground
+                                7 => {
+            
+                                },
+                                // GPSDATE
+                                8 => {
+                                    let (day, month, year) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(&field[4..6]) as u8);
+                                    gpsdate = GPSDate{day, month, year};
+                                },
+                                _ => (),
+                            }
+                        }
+                    } 
+                    RMC {
+                        valid: validity, 
+                        date: gpsdate,
+                    }
+                }
+                pub fn parse_gsa(&self, data: &[u8]) -> GSA {
+                    let mut fixmode = FixMode::NoFix;
+                    let mut sat_ids = [0u8; 12];
+                    let mut hdop= GPSFloat{int:0, fract:0};
+                    let mut vdop= GPSFloat{int:0, fract:0};
+                    let mut pdop= GPSFloat{int:0, fract:0};
+            
+                    for (i, field) in data.split(|c| *c == b',').enumerate() {
+                        if field.len() > 0 {
+                            match i {
+                                // Mode 1
+                                0 => {
+            
+                                },
+                                // Mode 2 - FixMode
+                                1 => {
+                                    fixmode = match atoi(&field) {
+                                        2 => FixMode::D2,
+                                        3 => FixMode::D3,
+                                        _ => FixMode::NoFix,
+                                    };
+                                },
+                                // IDs of sattelites in use
+                                2..=12 => {
+                                    let id = atoi(&field) as u8;
+                                    sat_ids[i-2] = id;
+                                },
+                                // Position Dilution of Precision
+                                13 => {
+                                    let (int, fract) = (field[0] as u32, field[2] as u32);
+                                    pdop = GPSFloat{int:int, fract:fract};
+                                },
+                                // Horizontal Dilution of Precision
+                                14 => {
+                                    let (int, fract) = (field[0] as u32, field[2] as u32);
+                                    hdop = GPSFloat{int:int, fract:fract};
+                                },
+                                // Vertical Dilution of Precision
+                                15 => {
+                                    let (int, fract) = (field[0] as u32, field[2] as u32);
+                                    vdop = GPSFloat{int:int, fract:fract};
+                                },
+                                _ => (),
+                            }
+                        }
+                    }
+                    GSA {
+                        hdop: hdop,
+                        vdop: vdop,
+                        pdop: pdop,
+                        fix: fixmode,
+                        satellite_ids: sat_ids,
+                    }
+                }
+                pub fn parse_gga(&self, data: &[u8]) -> GGA {
+                    let mut gpstime = GPSTime::new();
+                    let mut pos = Position::new();
+                    let mut satellites = 0u8;
+                    let mut fix_mode = FixType::NoFix;
+            
+                    for (i, field) in data.split(|c| *c == b',').enumerate() {
+                        if field.len() > 0 {
+                            match i {
+                                // UTC time
+                                0 => {
+                                    let (hour, minute, seconds) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(& field[4..6]) as u8);
+                                    gpstime.hour = hour;
+                                    gpstime.minute = minute;
+                                    gpstime.second = seconds;
+                                },
+                                // Lattitude
+                                1 => {
+                                    let (lat_int, lat_fract) = (atoi(&field[..2]), atoi(&field[2..4]));
+                                    pos.lattitude = GPSFloat{int:lat_int, fract:lat_fract};        
+                                },
+                                // N/S indicator
+                                2 => {
+                                    pos.ns_indicator = field[0] as char;
+                                },
+                                // Longitude
+                                3 => {
+                                    let (long_int, long_fract) = (atoi(&field[..2]), atoi(&field[2..4]));
+                                    pos.longitude = GPSFloat{int: long_int, fract:long_fract};
+                                },
+                                // E/W indicator
+                                4 => {
+                                    pos.ew_indicator = field[0] as char;
+                                },
+                                // FIX
+                                5 => {
+                                    fix_mode = match atoi(&field) {
+                                        0 => FixType::NoFix,
+                                        1 => FixType::GPSFix,
+                                        2 => FixType::DifferentialFix,
+                                        _ => FixType::NoFix,
+                                    };
+                                },
+                                // Satellites used
+                                6 => {
+                                    satellites = atoi(&field) as u8;
+                                },
+                                // Altitude 
+                                8 => {
+                                    let mut alt_iter = field.split(|c| *c == b'.');
+                                    let (alt_int, alt_frac) = (atoi(alt_iter.next().unwrap()), atoi(alt_iter.next().unwrap()));
+                                    pos.altitude = GPSFloat{int:alt_int, fract:alt_frac as u32};
+                                    // pos.altitude = alt_int as f32 + (alt_frac as f32)/10.0
+                                },
+                                _ => (),
+                            }
+                        }
+                    }
+
+                    GGA {
+                        time: gpstime, 
+                        position: pos,
+                        satellites_used: satellites,
+                        fix: fix_mode,
+                    }
+            
+                }
+                pub fn get_data(&self) -> GPS_Data {
+                    self.gps_data
+                }
+                pub fn report(&mut self) {
+                    use core::fmt::Write;
+                    write!(self.tx, "{}\n", self.gps_data.get_time());
+                    write!(self.tx, "{}\n", self.gps_data.get_date());
+                    write!(self.tx, "{}\n", self.gps_data.get_position());
+
                 }
             }
-        }
-    }
-    pub fn get_line(&self) -> (GPS_Statement, &[u8]) {
-        self.buffer.get_line()
-    }
-    pub fn buffer_is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-    pub fn clear_buffer(&mut self) {
-        self.buffer.clear();
-    }
-    pub fn parse(&mut self) {
-        if !self.buffer.is_empty() {
-            // hprintln!("s");
-            let (mut cmd, mut info) = self.get_line();
-            match cmd {
-                    GPS_Statement::GPRMC => { 
-                        let rmc_data = self.parse_rmc(info);
-                        self.gps_data.update_rmc(rmc_data);
-                    },
-                    GPS_Statement::GPGSA => {
-                        let gsa_data = self.parse_gsa(info);
-                        self.gps_data.update_gsa(gsa_data);
-                    },
-                    GPS_Statement::GPGGA => {
-                        let gga_data = self.parse_gga(info);
-                        self.gps_data.update_gga(gga_data);
-                    },
-                    _ => (),
-
-            }
+        )+
         
-            self.buffer.clear();
-        }
-    }
-    pub fn parse_rmc(&self, data: &[u8]) -> RMC {
-        let mut GPSdate = GPSDate::new();
-        let mut validity = false;
-
-        for (i, field) in data.split(|c| *c == b',').enumerate() {
-            if field.len() > 0 {
-                match i {
-                    // GPSTIME
-                    0 => {
-                        let (hour, minute, seconds) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(& field[4..6]) as u8);
-                    },
-                    // Receiver Validity
-                    1 => {
-                        validity = if field[0] == b'A' {
-                            true
-                        } else {
-                            false
-                        };
-                    },
-                    // Lattitude
-                    2 => {
-                    },
-                    // HEMISPHERE indicator
-                    3 => {
-                    },
-                    // LONGITUDE
-                    4 => {
-                    },
-                    // H ind
-                    5 => {
-                    },
-                    // Speed over ground
-                    6 => {
-
-                    },
-                    // Course over ground
-                    7 => {
-
-                    },
-                    // GPSDATE
-                    8 => {
-                        let (day, month, year) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(&field[4..6]) as u8);
-                        GPSdate = GPSDate{day, month, year};
-                        hprintln!("{}", year);
-                    },
-                    _ => (),
-                }
-            }
-        } 
-        RMC {
-            valid: validity, 
-            date: GPSdate,
-        }
-    }
-    pub fn parse_gsa(&self, data: &[u8]) -> GSA {
-        let mut fixmode = FixMode::NoFix;
-        let mut sat_ids = [0u8; 12];
-        let mut hdop= GPSFloat{int:0, fract:0};
-        let mut vdop= GPSFloat{int:0, fract:0};
-        let mut pdop= GPSFloat{int:0, fract:0};
-
-        for (i, field) in data.split(|c| *c == b',').enumerate() {
-            if field.len() > 0 {
-                match i {
-                    // Mode 1
-                    0 => {
-
-                    },
-                    // Mode 2 - FixMode
-                    1 => {
-                        fixmode = match atoi(&field) {
-                            2 => FixMode::D2,
-                            3 => FixMode::D3,
-                            _ => FixMode::NoFix,
-                        };
-                    },
-                    // IDs of sattelites in use
-                    2..=12 => {
-                        let id = atoi(&field) as u8;
-                        sat_ids[i-2] = id;
-                    },
-                    // Position Dilution of Precision
-                    13 => {
-                        let (int, fract) = (field[0] as u32, field[2] as u32);
-                        pdop = GPSFloat{int:int, fract:fract};
-                    },
-                    // Horizontal Dilution of Precision
-                    14 => {
-                        let (int, fract) = (field[0] as u32, field[2] as u32);
-                        hdop = GPSFloat{int:int, fract:fract};
-                    },
-                    // Vertical Dilution of Precision
-                    15 => {
-                        let (int, fract) = (field[0] as u32, field[2] as u32);
-                        vdop = GPSFloat{int:int, fract:fract};
-                    },
-                    _ => (),
-                }
-            }
-        }
-        GSA {
-            hdop: hdop,
-            vdop: vdop,
-            pdop: pdop,
-            fix: fixmode,
-            satellite_ids: sat_ids,
-        }
-    }
-    pub fn parse_gga(&self, data: &[u8]) -> GGA {
-        let mut GPStime = GPSTime::new();
-        let mut pos = Position::new();
-        let mut satellites = 0u8;
-        let mut fix_mode = FixType::NoFix;
-
-        for (i, field) in data.split(|c| *c == b',').enumerate() {
-            if field.len() > 0 {
-                match i {
-                    // UTC time
-                    0 => {
-                        let (hour, minute, seconds) = (atoi(&field[..2]) as u8, atoi(&field[2..4]) as u8, atoi(& field[4..6]) as u8);
-                        GPStime.hour = hour;
-                        GPStime.minute = minute;
-                        GPStime.second = seconds;
-                    },
-                    // Lattitude
-                    1 => {
-                        let (lat_int, lat_fract) = (atoi(&field[..2]), atoi(&field[2..4]));
-                        pos.lattitude = GPSFloat{int:lat_int, fract:lat_fract};
-
-                        // pos.lattitude = (lat as f32)/100.0;
-                    },
-                    // N/S indicator
-                    2 => {
-                        pos.ns_indicator = field[0] as char;
-                    },
-                    // Longitude
-                    3 => {
-                        let (long_int, long_fract) = (atoi(&field[..2]), atoi(&field[2..4]));
-                        pos.longitude = GPSFloat{int: long_int, fract:long_fract};
-                        // pos.longitude = (long as f32)/100.0;
-                    },
-                    // E/W indicator
-                    4 => {
-                        pos.ew_indicator = field[0] as char;
-                    },
-                    // FIX
-                    5 => {
-                        fix_mode = match atoi(&field) {
-                            0 => FixType::NoFix,
-                            1 => FixType::GPSFix,
-                            2 => FixType::DifferentialFix,
-                            _ => FixType::NoFix,
-                        };
-                    },
-                    // Satellites used
-                    6 => {
-                        satellites = atoi(&field) as u8;
-                    },
-                    // Altitude 
-                    8 => {
-                        let (alt_int, alt_frac) = (atoi(&field[..2]), field[4]);
-                        pos.altitude = GPSFloat{int:alt_int, fract:alt_frac as u32};
-                        // pos.altitude = alt_int as f32 + (alt_frac as f32)/10.0
-                    },
-                    _ => (),
-                }
-            }
-        }
-        GGA {
-            time: GPStime, 
-            position: pos,
-            satellites_used: satellites,
-            fix: fix_mode,
-        }
-
-    }
-    pub fn get_data(&self) -> GPS_Data {
-        self.gps_data
     }
 }
+
 
 #[derive(Debug, Copy, Clone)]
 pub struct GPS_Data {
@@ -614,4 +622,29 @@ impl GPS_Data {
         self.fix_mode = data.fix;
         self.satellite_ids = data.satellite_ids;
     }
+}
+
+neo! {
+    NEO6: (
+        USART1,
+        Rx1,
+        Tx1,
+    ),
+    NEO6: (
+        USART2,
+        Rx2,
+        Tx2,
+    ),
+    NEO6: (
+        USART3,     
+        Rx3,
+        Tx3,
+
+    ),
+    NEO6: (
+        USART3,     
+        Rx3,
+        Tx1,
+
+    ),
 }
