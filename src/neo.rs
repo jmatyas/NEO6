@@ -149,6 +149,8 @@ pub enum FixMode {
 pub struct RMC {
     valid: bool,
     date: GPSDate,
+    speed: GPSFloat,
+    course: GPSFloat,
 }
 
 pub struct GGA {
@@ -359,6 +361,8 @@ macro_rules! neo {
                 pub fn parse_rmc(&self, data: &[u8]) -> RMC {
                     let mut gpsdate = GPSDate::new();
                     let mut validity = false;
+                    let mut speed = GPSFloat{int:0, fract:0};
+                    let mut course = GPSFloat{int:0, fract:0};
             
                     for (i, field) in data.split(|c| *c == b',').enumerate() {
                         if field.len() > 0 {
@@ -389,11 +393,15 @@ macro_rules! neo {
                                 },
                                 // Speed over ground
                                 6 => {
-            
+                                    let mut speed_iter = field.split(|c| *c == b'.');
+                                    let (int, fract) = (atoi(speed_iter.next().unwrap()), atoi(speed_iter.next().unwrap()));
+                                    speed = GPSFloat{int:int, fract: fract};
                                 },
                                 // Course over ground
                                 7 => {
-            
+                                    let mut course_iter = field.split(|c| *c == b'.');
+                                    let (int, fract) = (atoi(course_iter.next().unwrap()), atoi(course_iter.next().unwrap()));
+                                    course = GPSFloat{int:int, fract: fract};            
                                 },
                                 // GPSDATE
                                 8 => {
@@ -407,6 +415,8 @@ macro_rules! neo {
                     RMC {
                         valid: validity, 
                         date: gpsdate,
+                        speed: speed,
+                        course: course,
                     }
                 }
                 pub fn parse_gsa(&self, data: &[u8]) -> GSA {
@@ -515,7 +525,6 @@ macro_rules! neo {
                                     let mut alt_iter = field.split(|c| *c == b'.');
                                     let (alt_int, alt_frac) = (atoi(alt_iter.next().unwrap()), atoi(alt_iter.next().unwrap()));
                                     pos.altitude = GPSFloat{int:alt_int, fract:alt_frac as u32};
-                                    // pos.altitude = alt_int as f32 + (alt_frac as f32)/10.0
                                 },
                                 _ => (),
                             }
@@ -538,6 +547,8 @@ macro_rules! neo {
                     write!(self.tx, "{}\n", self.gps_data.get_time());
                     write!(self.tx, "{}\n", self.gps_data.get_date());
                     write!(self.tx, "{}\n", self.gps_data.get_position());
+                    write!(self.tx, "Speed: {} knots\n", self.gps_data.get_speed());
+                    write!(self.tx, "Course: {} degrees\n", self.gps_data.get_course());
 
                 }
             }
@@ -553,6 +564,8 @@ pub struct GPS_Data {
     // from RMC
     valid: bool,
     date: GPSDate,
+    speed: GPSFloat,
+    course: GPSFloat,
     // from GGA
     position: Position,
     satellites_used: u8,
@@ -569,8 +582,11 @@ pub struct GPS_Data {
 impl GPS_Data {
     pub fn new() -> Self {
         GPS_Data { 
+            // from RMC
             valid: false,
             date: GPSDate::new(),
+            speed: GPSFloat{int: 0, fract:0},
+            course: GPSFloat{int:0, fract: 0},
             // from GGA
             position: Position::new(),
             satellites_used: 0,
@@ -605,9 +621,17 @@ impl GPS_Data {
     pub fn get_fix_mode(&self) -> FixMode {
         self.fix_mode
     }
+    pub fn get_speed(&self) -> GPSFloat {
+        self.speed
+    }
+    pub fn get_course(&self) -> GPSFloat {
+        self.course
+    }
     pub fn update_rmc (&mut self, data: RMC) {
         self.valid = data.valid;
         self.date = data.date;
+        self.speed = data.speed;
+        self.course = data.course;
     }
     pub fn update_gga (&mut self, data: GGA) {
         self.position = data.position;
