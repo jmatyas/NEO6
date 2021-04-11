@@ -17,10 +17,12 @@ panic-semihosting = "0.5.6"
 embedded-dma = "0.1.2"
 
 [dependencies.stm32f1xx-hal]
-path = "../stm32f1xx-hal"
 version = "0.7.0"
 features = ["rt", "stm32f103", "medium"]
 
 [dependencies.stm32f1]
 version = "0.13.0"
 features = ["stm32f103", "rt"]
+
+[patch.crates-io]
+stm32f1xx-hal = {git = "https://github.com/jmatyas/stm32f1xx-hal", branch = "jma-dev"}
