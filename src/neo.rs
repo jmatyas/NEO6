@@ -37,7 +37,6 @@ pub enum GPS_Statement {
     Other,
 }
 
-
 #[derive(Debug)]
 pub enum Half {
     First,
@@ -67,14 +66,12 @@ impl fmt::Display for GPSTime {
     }
 }
 
-
 #[derive(Debug, Copy, Clone)]
 pub struct GPSDate {
     pub day: u8,
     pub month: u8,
     pub year: u8,
 }
-
 
 impl GPSDate {
     pub fn new() -> Self {
@@ -86,14 +83,11 @@ impl GPSDate {
     }
 }
 
-
 impl fmt::Display for GPSDate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
         write!(f, "{}/{}/{}", self.day, self.month, self.year)
     }
 }
-
-
 
 #[derive(Debug, Copy, Clone)]
 pub struct Position {
@@ -122,7 +116,6 @@ impl fmt::Display for Position {
         write!(f, "Latt: {} {}; Long: {} {}; Alt: {} m", self.lattitude,  self.ns_indicator, self.longitude, self.ew_indicator, self.altitude)
     }
 }
-
 
 #[derive(Debug)]
 pub struct GPSSatellite {
@@ -240,7 +233,6 @@ impl <'a> MSG <'a> {
         if self.len == 0 { return true} else {return false};
     }
 
-
     pub fn get_line(&self) -> (GPS_Statement, &[u8]) {
         if self.len > 0 {
             let mut data = match self.last_read {
@@ -260,6 +252,96 @@ impl <'a> MSG <'a> {
             return (cmd, info);
         }
         (GPS_Statement::Other, &[0u8; 1])
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct GPS_Data {
+
+    // from RMC
+    valid: bool,
+    date: GPSDate,
+    speed: GPSFloat,
+    course: GPSFloat,
+    // from GGA
+    position: Position,
+    satellites_used: u8,
+    fix: FixType,
+    time: GPSTime,
+    // from GSA
+    hdop: GPSFloat,
+    vdop: GPSFloat,
+    pdop: GPSFloat,
+    fix_mode: FixMode,
+    satellite_ids: [u8; 12],
+}
+
+impl GPS_Data {
+    pub fn new() -> Self {
+        GPS_Data { 
+            // from RMC
+            valid: false,
+            date: GPSDate::new(),
+            speed: GPSFloat{int: 0, fract:0},
+            course: GPSFloat{int:0, fract: 0},
+            // from GGA
+            position: Position::new(),
+            satellites_used: 0,
+            fix: FixType::NoFix,
+            time: GPSTime::new(),
+            // from GSA
+            hdop: GPSFloat{int:0, fract:0},
+            vdop: GPSFloat{int:0, fract:0},
+            pdop: GPSFloat{int:0, fract:0},
+            fix_mode: FixMode::NoFix,
+            satellite_ids: [0u8; 12],
+        }
+    }
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+    pub fn get_position(&self) -> Position {
+        self.position
+    }
+    pub fn get_time(&self) -> GPSTime {
+        self.time
+    }
+    pub fn get_date(&self) -> GPSDate {
+        self.date
+    }
+    pub fn satellites_no(&self) -> u8 {
+        self.satellites_used
+    }
+    pub fn get_fix_type(&self) -> FixType {
+        self.fix
+    }
+    pub fn get_fix_mode(&self) -> FixMode {
+        self.fix_mode
+    }
+    pub fn get_speed(&self) -> GPSFloat {
+        self.speed
+    }
+    pub fn get_course(&self) -> GPSFloat {
+        self.course
+    }
+    pub fn update_rmc (&mut self, data: RMC) {
+        self.valid = data.valid;
+        self.date = data.date;
+        self.speed = data.speed;
+        self.course = data.course;
+    }
+    pub fn update_gga (&mut self, data: GGA) {
+        self.position = data.position;
+        self.satellites_used = data.satellites_used;
+        self.fix = data.fix;
+        self.time = data.time;
+    }
+    pub fn update_gsa (&mut self, data: GSA) {
+        self.hdop = data.hdop;
+        self.vdop = data.vdop;
+        self.pdop = data.pdop;
+        self.fix_mode = data.fix;
+        self.satellite_ids = data.satellite_ids;
     }
 }
 
@@ -554,97 +636,6 @@ macro_rules! neo {
             }
         )+
         
-    }
-}
-
-
-#[derive(Debug, Copy, Clone)]
-pub struct GPS_Data {
-
-    // from RMC
-    valid: bool,
-    date: GPSDate,
-    speed: GPSFloat,
-    course: GPSFloat,
-    // from GGA
-    position: Position,
-    satellites_used: u8,
-    fix: FixType,
-    time: GPSTime,
-    // from GSA
-    hdop: GPSFloat,
-    vdop: GPSFloat,
-    pdop: GPSFloat,
-    fix_mode: FixMode,
-    satellite_ids: [u8; 12],
-}
-
-impl GPS_Data {
-    pub fn new() -> Self {
-        GPS_Data { 
-            // from RMC
-            valid: false,
-            date: GPSDate::new(),
-            speed: GPSFloat{int: 0, fract:0},
-            course: GPSFloat{int:0, fract: 0},
-            // from GGA
-            position: Position::new(),
-            satellites_used: 0,
-            fix: FixType::NoFix,
-            time: GPSTime::new(),
-            // from GSA
-            hdop: GPSFloat{int:0, fract:0},
-            vdop: GPSFloat{int:0, fract:0},
-            pdop: GPSFloat{int:0, fract:0},
-            fix_mode: FixMode::NoFix,
-            satellite_ids: [0u8; 12],
-        }
-    }
-    pub fn is_valid(&self) -> bool {
-        self.valid
-    }
-    pub fn get_position(&self) -> Position {
-        self.position
-    }
-    pub fn get_time(&self) -> GPSTime {
-        self.time
-    }
-    pub fn get_date(&self) -> GPSDate {
-        self.date
-    }
-    pub fn satellites_no(&self) -> u8 {
-        self.satellites_used
-    }
-    pub fn get_fix_type(&self) -> FixType {
-        self.fix
-    }
-    pub fn get_fix_mode(&self) -> FixMode {
-        self.fix_mode
-    }
-    pub fn get_speed(&self) -> GPSFloat {
-        self.speed
-    }
-    pub fn get_course(&self) -> GPSFloat {
-        self.course
-    }
-    pub fn update_rmc (&mut self, data: RMC) {
-        self.valid = data.valid;
-        self.date = data.date;
-        self.speed = data.speed;
-        self.course = data.course;
-    }
-    pub fn update_gga (&mut self, data: GGA) {
-        self.position = data.position;
-        self.satellites_used = data.satellites_used;
-        self.fix = data.fix;
-        self.time = data.time;
-    }
-    pub fn update_gsa (&mut self, data: GSA) {
-        self.hdop = data.hdop;
-        self.vdop = data.vdop;
-        self.pdop = data.pdop;
-        self.fix_mode = data.fix;
-        self.satellite_ids = data.satellite_ids;
     }
 }
 
