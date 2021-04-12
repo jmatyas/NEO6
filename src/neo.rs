@@ -582,7 +582,7 @@ macro_rules! neo {
                                 },
                                 // Longitude
                                 3 => {
-                                    let (long_int, long_fract) = (atoi(&field[..2]), atoi(&field[2..4]));
+                                    let (long_int, long_fract) = (atoi(&field[..3]), atoi(&field[3..5]));
                                     pos.longitude = GPSFloat{int: long_int, fract:long_fract};
                                 },
                                 // E/W indicator
